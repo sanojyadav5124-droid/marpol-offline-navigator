@@ -1,21 +1,1277 @@
-MIT License
+const STORAGE_KEY = "marpolVoyageControl_v1";
 
-Copyright (c) 2026 sanojyadav5124-droid
+const state = {
+  theme: "Ocean Deep",
+  isAdmin: false,
+  adminPasswordHash: null,
+  vessel: { name: "MV NORTHERN STAR", voyage: "" },
+  route: { waypoints: [] },
+  layers: [],
+};
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+function saveState() {
+  const toSave = {
+    theme: state.theme,
+    adminPasswordHash: state.adminPasswordHash,
+    vessel: state.vessel,
+    route: state.route,
+    layers: state.layers,
+  };
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave)); }
+  catch (e) { console.warn("Could not save to localStorage:", e); }
+}
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    Object.assign(state, saved);
+  } catch (e) {
+    console.warn("Could not load saved state:", e);
+  }
+}
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+function exportStateToFile() {
+  const toSave = {
+    theme: state.theme,
+    adminPasswordHash: state.adminPasswordHash,
+    vessel: state.vessel,
+    route: state.route,
+    layers: state.layers,
+    exportedAt: new Date().toISOString(),
+  };
+  const blob = new Blob([JSON.stringify(toSave, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `marpol_voyage_control_${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importStateFromFile(file, onDone) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const loaded = JSON.parse(e.target.result);
+      Object.assign(state, loaded);
+      saveState();
+      if (onDone) onDone(true);
+    } catch (err) {
+      if (onDone) onDone(false, err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+async function saltedHash(pwd, salt) {
+  const enc = new TextEncoder();
+  const data = enc.encode(salt + pwd + salt);
+  if (window.crypto && window.crypto.subtle) {
+    const digest = await window.crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+  }
+  let h = 5381;
+  for (let i = 0; i < data.length; i++) h = ((h * 33) ^ data[i]) >>> 0;
+  return h.toString(16);
+}
+
+const ADMIN_SALT = "marpol-voyage-control-salt";
+const DEFAULT_ADMIN_PASSWORD = "Marpol@2026";
+
+window.state = state;
+"path":"js/compliance.js
+function runRouteCheck(waypoints) {
+  const events = [];
+  if (waypoints.length < 2) {
+    return { events, message: "Load a route with at least 2 waypoints first." };
+  }
+
+  let currentAreas = new Set();
+  for (let leg = 0; leg < waypoints.length - 1; leg++) {
+    const wp1 = waypoints[leg], wp2 = waypoints[leg + 1];
+    const legDist = nmDistance(wp1.lat, wp1.lon, wp2.lat, wp2.lon);
+    const steps = Math.max(1, Math.floor(legDist / 10));
+
+    for (let s = 0; s <= steps; s++) {
+      const frac = s / steps;
+      const lat = wp1.lat + (wp2.lat - wp1.lat) * frac;
+      const lon = wp1.lon + (wp2.lon - wp1.lon) * frac;
+      const hits = checkPoint(lat, lon);
+      const hereAreas = new Set(hits.map(h => h.name));
+
+      for (const name of currentAreas) {
+        if (!hereAreas.has(name)) {
+          events.push({ leg: leg + 1, event: `EXIT: ${name}`, entryWp: `WP${leg + 1}`, exitWp: `WP${leg + 2}`, rule: "" });
+        }
+      }
+      for (const hit of hits) {
+        if (!currentAreas.has(hit.name)) {
+          events.push({ leg: leg + 1, event: `ENTER: ${hit.name}`, entryWp: `WP${leg + 1}`, exitWp: "", rule: hit.rule });
+        }
+      }
+      currentAreas = hereAreas;
+    }
+  }
+
+  if (events.length === 0) {
+    return { events, message: "Route stays outside all defined MARPOL/ECA areas along its full length." };
+  }
+  return { events, message: null };
+}
+
+window.runRouteCheck = runRouteCheck;
+"path":"js/route_import.js
+const LAT_SYNONYMS = ["lat", "latitude", "wplat", "y"];
+const LON_SYNONYMS = ["lon", "long", "longitude", "wplon", "x"];
+const SPD_SYNONYMS = ["speed", "spd", "speedkn", "kn"];
+const ETD_SYNONYMS = ["etd", "eta", "etdeta", "date", "datetime"];
+const NAME_SYNONYMS = ["wpname", "name", "waypoint", "waypointname"];
+
+function normalizeHeader(h) {
+  return h.trim().toLowerCase().replace(/[\s_]/g, "");
+}
+
+function splitAuto(line) {
+  if (line.includes("\t")) return line.split("\t");
+  if (line.includes(";")) return line.split(";");
+  return line.split(",");
+}
+
+function trimQuotes(s) {
+  s = s.trim();
+  if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') return s.slice(1, -1);
+  return s;
+}
+
+function parseLatLon(raw, isLat) {
+  let s = trimQuotes(raw).trim();
+  if (s === "") throw new Error("Empty coordinate");
+  if (!isNaN(parseFloat(s)) && /^-?\d+(\.\d+)?$/.test(s)) {
+    const v = parseFloat(s);
+    checkRange(v, isLat, s);
+    return v;
+  }
+  const hemi = s.slice(-1).toUpperCase();
+  let sign = 1;
+  if (hemi === "S" || hemi === "W") sign = -1;
+  if ("NSEW".includes(hemi)) s = s.slice(0, -1).trim();
+  s = s.replace(/[°'"]/g, " ").replace(/\s+/g, " ").trim();
+  const parts = s.split(" ").map(Number);
+  const deg = parts[0] || 0, min = parts[1] || 0, sec = parts[2] || 0;
+  const v = sign * (deg + min / 60 + sec / 3600);
+  checkRange(v, isLat, raw);
+  return v;
+}
+
+function checkRange(v, isLat, raw) {
+  if (isLat && (v < -90 || v > 90)) throw new Error(`Latitude out of range: ${raw}`);
+  if (!isLat && (v < -180 || v > 180)) throw new Error(`Longitude out of range: ${raw}`);
+}
+
+function mapHeaders(headers) {
+  const map = { lat: -1, lon: -1, spd: -1, etd: -1, name: -1 };
+  headers.forEach((h, i) => {
+    const n = normalizeHeader(h);
+    if (LAT_SYNONYMS.includes(n)) map.lat = i;
+    else if (LON_SYNONYMS.includes(n)) map.lon = i;
+    else if (SPD_SYNONYMS.includes(n)) map.spd = i;
+    else if (ETD_SYNONYMS.includes(n)) map.etd = i;
+    else if (NAME_SYNONYMS.includes(n)) map.name = i;
+  });
+  return map;
+}
+
+function importRouteCSV(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim() !== "");
+  const result = { waypoints: [], log: [] };
+  if (lines.length === 0) return result;
+
+  const headers = splitAuto(lines[0]).map(trimQuotes);
+  const map = mapHeaders(headers);
+  if (map.lat < 0 || map.lon < 0 || map.spd < 0 || map.etd < 0) {
+    result.log.push({ row: 1, field: "header", value: "-", reason: "Required column missing (need lat/lon/speed/ETD)", fix: "Check the header row" });
+    return result;
+  }
+
+  let prevEtd = null;
+  for (let r = 1; r < lines.length; r++) {
+    const cols = splitAuto(lines[r]);
+    const rowNum = r + 1;
+    let ok = true;
+    let lat, lon, spd, etd;
+
+    try { lat = parseLatLon(cols[map.lat], true); }
+    catch (e) { result.log.push({ row: rowNum, field: "Latitude", value: cols[map.lat], reason: e.message, fix: "Use decimal or D M S with N/S suffix" }); ok = false; }
+
+    try { lon = parseLatLon(cols[map.lon], false); }
+    catch (e) { result.log.push({ row: rowNum, field: "Longitude", value: cols[map.lon], reason: e.message, fix: "Use decimal or D M S with E/W suffix" }); ok = false; }
+
+    if (ok) {
+      spd = parseFloat(trimQuotes(cols[map.spd]));
+      if (isNaN(spd) || spd <= 0 || spd > 40) {
+        result.log.push({ row: rowNum, field: "Speed", value: cols[map.spd], reason: "Speed must be numeric, >0 and <=40kn (sanity limit)", fix: "Check the source value" });
+        ok = false;
+      }
+    }
+
+    if (ok) {
+      const etdStr = trimQuotes(cols[map.etd]);
+      etd = new Date(etdStr);
+      if (isNaN(etd.getTime())) {
+        result.log.push({ row: rowNum, field: "ETD/ETA", value: cols[map.etd], reason: "Unparseable date/time", fix: "Use YYYY-MM-DD HH:MM or DD-MM-YYYY HH:MM" });
+        ok = false;
+      }
+    }
+
+    if (ok && prevEtd && etd < prevEtd) {
+      result.log.push({ row: rowNum, field: "ETD/ETA", value: cols[map.etd], reason: "Out of chronological order vs previous waypoint", fix: "Check waypoint sequence" });
+      ok = false;
+    }
+
+    if (ok) {
+      result.waypoints.push({
+        name: map.name >= 0 ? trimQuotes(cols[map.name]) : `WP${result.waypoints.length + 1}`,
+        lat, lon, speed: spd, etd: etd.toISOString(),
+      });
+      prevEtd = etd;
+    }
+  }
+  return result;
+}
+
+function loadSampleRoute() {
+  const sample = [
+    { name: "Rotterdam Pilot", lat: 51.9167, lon: 4.1333, speed: 12, etd: "2026-08-18T06:00:00" },
+    { name: "Dover Strait", lat: 50.2000, lon: 1.5000, speed: 13.5, etd: "2026-08-18T18:40:00" },
+    { name: "Ushant TSS", lat: 48.3333, lon: -5.5000, speed: 14, etd: "2026-08-19T12:00:00" },
+    { name: "Cape Finisterre", lat: 42.8833, lon: -9.5000, speed: 14, etd: "2026-08-20T02:15:00" },
+    { name: "Gibraltar Strait", lat: 35.9500, lon: -5.5833, speed: 12, etd: "2026-08-21T10:00:00" },
+    { name: "Suez Approach", lat: 31.5000, lon: 32.3333, speed: 12, etd: "2026-08-24T04:00:00" },
+  ];
+  return sample.map(wp => ({ ...wp, etd: new Date(wp.etd).toISOString() }));
+}
+
+window.loadSampleRoute = loadSampleRoute;
+window.importRouteCSV = importRouteCSV;
+"path":"js/simulator.js
+const sim = {
+  waypoints: [], cumDist: [], totalDist: 0,
+  simTime: null, running: false, currentAreas: new Set(),
+  intervalId: null,
+};
+
+const BASE_SIM_MINUTES_PER_TICK = 10;
+const TICK_MS = 1000;
+
+function simReset() {
+  const wps = state.route.waypoints.filter(wp => wp.etd);
+  if (wps.length < 2) {
+    document.getElementById("simStatus").textContent = "Load a route with at least 2 timestamped waypoints first (Route Import).";
+    sim.waypoints = [];
+    return;
+  }
+  sim.waypoints = wps;
+  sim.cumDist = [0];
+  sim.totalDist = 0;
+  for (let i = 1; i < wps.length; i++) {
+    const d = nmDistance(wps[i - 1].lat, wps[i - 1].lon, wps[i].lat, wps[i].lon);
+    sim.cumDist.push(sim.cumDist[i - 1] + d);
+    sim.totalDist += d;
+  }
+  sim.simTime = new Date(wps[0].etd);
+  sim.running = false;
+  sim.currentAreas = new Set();
+  clearInterval(sim.intervalId);
+  document.getElementById("simEventLog").innerHTML = "";
+  document.getElementById("simStatus").textContent = `Loaded ${wps.length} timestamped waypoints, ${sim.totalDist.toFixed(1)} nm total. Ready.`;
+  advanceAndRender(sim.simTime);
+}
+
+function simPlay() {
+  if (sim.waypoints.length === 0) { simReset(); if (sim.waypoints.length === 0) return; }
+  sim.running = true;
+  clearInterval(sim.intervalId);
+  sim.intervalId = setInterval(simTick, TICK_MS);
+}
+
+function simPause() {
+  sim.running = false;
+  clearInterval(sim.intervalId);
+}
+
+function simStep() {
+  if (sim.waypoints.length === 0) { simReset(); if (sim.waypoints.length === 0) return; }
+  const mult = parseFloat(document.getElementById("simSpeedMult").value) || 1;
+  const next = new Date(sim.simTime.getTime() + BASE_SIM_MINUTES_PER_TICK * mult * 60000);
+  advanceAndRender(next);
+}
+
+function simInstant() {
+  if (sim.waypoints.length === 0) { simReset(); if (sim.waypoints.length === 0) return; }
+  sim.running = false;
+  clearInterval(sim.intervalId);
+  const last = sim.waypoints[sim.waypoints.length - 1];
+  advanceAndRender(new Date(last.etd));
+  const result = runRouteCheck(state.route.waypoints);
+  renderRouteCheckResults(result);
+  document.getElementById("simStatus").textContent = "Instant: jumped to voyage end. Full leg-by-leg timeline is on Route Check.";
+}
+
+function simTick() {
+  if (!sim.running) { clearInterval(sim.intervalId); return; }
+  const mult = parseFloat(document.getElementById("simSpeedMult").value) || 1;
+  const next = new Date(sim.simTime.getTime() + BASE_SIM_MINUTES_PER_TICK * mult * 60000);
+  advanceAndRender(next);
+}
+
+function advanceAndRender(targetTime) {
+  const wps = sim.waypoints;
+  const lastEtd = new Date(wps[wps.length - 1].etd);
+  if (targetTime >= lastEtd) {
+    targetTime = lastEtd;
+    sim.running = false;
+    clearInterval(sim.intervalId);
+  }
+  sim.simTime = targetTime;
+
+  let legIdx = wps.length - 2;
+  for (let i = 0; i < wps.length - 1; i++) {
+    const t1 = new Date(wps[i].etd), t2 = new Date(wps[i + 1].etd);
+    if (targetTime >= t1 && targetTime <= t2) { legIdx = i; break; }
+  }
+  const wp1 = wps[legIdx], wp2 = wps[legIdx + 1];
+  const t1 = new Date(wp1.etd).getTime(), t2 = new Date(wp2.etd).getTime();
+  let frac = t2 === t1 ? 0 : (targetTime.getTime() - t1) / (t2 - t1);
+  frac = Math.max(0, Math.min(1, frac));
+
+  const curLat = wp1.lat + (wp2.lat - wp1.lat) * frac;
+  const curLon = wp1.lon + (wp2.lon - wp1.lon) * frac;
+  const course = initialBearing(wp1.lat, wp1.lon, wp2.lat, wp2.lon);
+  const distRun = sim.cumDist[legIdx] + nmDistance(wp1.lat, wp1.lon, curLat, curLon);
+  const distToGo = sim.totalDist - distRun;
+
+  document.getElementById("simPosition").textContent = `${curLat.toFixed(4)}, ${curLon.toFixed(4)}`;
+  document.getElementById("simCourse").textContent = `${course.toFixed(0)} deg`;
+  document.getElementById("simSpeed").textContent = `${wp1.speed.toFixed(1)} kn`;
+  document.getElementById("simTime").textContent = sim.simTime.toLocaleString();
+  document.getElementById("simDistRun").textContent = distRun.toFixed(1);
+  document.getElementById("simDistToGo").textContent = distToGo.toFixed(1);
+  document.getElementById("simEta").textContent = lastEtd.toLocaleString();
+
+  window.vesselPos = { lat: curLat, lon: curLon };
+  if (typeof drawMap === "function" && document.getElementById("page-worldmap").classList.contains("active")) drawMap();
+
+  const hits = checkPoint(curLat, curLon);
+  const hereAreas = new Set(hits.map(h => h.name));
+  const logBody = document.getElementById("simEventLog");
+
+  for (const name of sim.currentAreas) {
+    if (!hereAreas.has(name)) {
+      logBody.innerHTML += `<tr><td>${sim.simTime.toLocaleString()}</td><td>EXIT</td><td>${name}</td><td>${curLat.toFixed(4)}, ${curLon.toFixed(4)}</td></tr>`;
+    }
+  }
+  for (const hit of hits) {
+    if (!sim.currentAreas.has(hit.name)) {
+      logBody.innerHTML += `<tr><td>${sim.simTime.toLocaleString()}</td><td>ENTER</td><td>${hit.name}</td><td>${curLat.toFixed(4)}, ${curLon.toFixed(4)}</td></tr>`;
+    }
+  }
+  sim.currentAreas = hereAreas;
+
+  const banner = document.getElementById("simStatusBanner");
+  if (hits.length === 0) {
+    banner.textContent = "Clear water — no MARPOL/ECA area in effect.";
+    banner.className = "status-banner";
+  } else {
+    banner.textContent = "IN: " + hits.map(h => h.name).join("; ") + (!sim.running && sim.simTime.getTime() === lastEtd.getTime() ? "  — voyage complete." : "");
+    banner.className = "status-banner inside";
+  }
+}
+
+window.simReset = simReset;
+window.simPlay = simPlay;
+window.simPause = simPause;
+window.simStep = simStep;
+window.simInstant = simInstant;
+"path":"js/report.js
+function generateReport() {
+  const wps = state.route.waypoints;
+  const el = document.getElementById("reportContent");
+  if (wps.length < 2) {
+    el.innerHTML = `<p class="hint">No route loaded — nothing to report yet.</p>`;
+    return;
+  }
+
+  let totalDist = 0;
+  for (let i = 0; i < wps.length - 1; i++) {
+    totalDist += nmDistance(wps[i].lat, wps[i].lon, wps[i + 1].lat, wps[i + 1].lon);
+  }
+
+  const result = runRouteCheck(wps);
+  let html = `
+    <h3 style="margin-bottom:2px;">VOYAGE COMPLIANCE REPORT</h3>
+    <div class="hint">Generated: ${new Date().toLocaleString()}</div>
+    <p><strong>Route:</strong> ${wps[0].name} &rarr; ${wps[wps.length - 1].name} (${wps.length} waypoints)<br>
+    <strong>Total distance:</strong> ${totalDist.toFixed(1)} nm &nbsp;
+    <strong>ETD:</strong> ${new Date(wps[0].etd).toLocaleString()} &nbsp;
+    <strong>ETA:</strong> ${new Date(wps[wps.length - 1].etd).toLocaleString()}</p>
+
+    <h3>Waypoints</h3>
+    <table><thead><tr><th>WP</th><th>Name</th><th>Lat</th><th>Lon</th><th>Speed (kn)</th><th>ETD/ETA</th></tr></thead><tbody>
+    ${wps.map((wp, i) => `<tr><td>${i + 1}</td><td>${wp.name}</td><td>${wp.lat.toFixed(4)}</td><td>${wp.lon.toFixed(4)}</td><td>${wp.speed}</td><td>${new Date(wp.etd).toLocaleString()}</td></tr>`).join("")}
+    </tbody></table>
+
+    <h3>MARPOL / ECA Compliance Timeline</h3>`;
+
+  if (result.message) {
+    html += `<p>${result.message}</p>`;
+  } else {
+    html += `<table><thead><tr><th>Leg</th><th>Event</th><th>Entry WP</th><th>Exit WP</th><th>Rule</th></tr></thead><tbody>
+    ${result.events.map(ev => `<tr><td>${ev.leg}</td><td>${ev.event}</td><td>${ev.entryWp}</td><td>${ev.exitWp}</td><td>${ev.rule}</td></tr>`).join("")}
+    </tbody></table>`;
+  }
+
+  el.innerHTML = html;
+}
+
+window.generateReport = generateReport;
+"path":"js/world_map.js
+let mapView = { centerLon: 0, centerLat: 20, zoom: 1 };
+let mapCanvas, mapCtx;
+let mapDragging = false, mapDragStart = null;
+
+function initWorldMap() {
+  mapCanvas = document.getElementById("mapCanvas");
+  mapCtx = mapCanvas.getContext("2d");
+  resizeMapCanvas();
+  window.addEventListener("resize", () => { resizeMapCanvas(); drawMap(); });
+
+  mapCanvas.addEventListener("mousedown", (e) => {
+    mapDragging = true;
+    mapDragStart = { x: e.offsetX, y: e.offsetY, centerLon: mapView.centerLon, centerLat: mapView.centerLat };
+  });
+  window.addEventListener("mouseup", () => { mapDragging = false; });
+  mapCanvas.addEventListener("mousemove", (e) => {
+    if (!mapDragging) return;
+    const scale = baseScale() * mapView.zoom;
+    const dx = (e.offsetX - mapDragStart.x) / scale;
+    const dy = (e.offsetY - mapDragStart.y) / scale;
+    mapView.centerLon = mapDragStart.centerLon - dx;
+    mapView.centerLat = mapDragStart.centerLat + dy;
+    drawMap();
+  });
+  mapCanvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    mapView.zoom = Math.max(0.3, Math.min(60, mapView.zoom * factor));
+    drawMap();
+  }, { passive: false });
+
+  drawMap();
+}
+
+function resizeMapCanvas() {
+  const wrap = mapCanvas.parentElement;
+  mapCanvas.width = wrap.clientWidth;
+  mapCanvas.height = 520;
+}
+
+function baseScale() {
+  return mapCanvas.width / 360;
+}
+
+function project(lat, lon) {
+  const scale = baseScale() * mapView.zoom;
+  const x = mapCanvas.width / 2 + (lon - mapView.centerLon) * scale;
+  const y = mapCanvas.height / 2 - (lat - mapView.centerLat) * scale;
+  return [x, y];
+}
+
+function themeColor(varName) {
+  return getComputedStyle(document.body).getPropertyValue(varName).trim();
+}
+
+function drawMap() {
+  if (!mapCtx) return;
+  const w = mapCanvas.width, h = mapCanvas.height;
+  mapCtx.fillStyle = themeColor("--bg");
+  mapCtx.fillRect(0, 0, w, h);
+
+  mapCtx.strokeStyle = "rgba(255,255,255,0.06)";
+  mapCtx.lineWidth = 1;
+  for (let lon = -180; lon <= 180; lon += 30) {
+    const [x1, y1] = project(-90, lon);
+    const [x2, y2] = project(90, lon);
+    mapCtx.beginPath();
+    mapCtx.moveTo(x1, y1); mapCtx.lineTo(x2, y2); mapCtx.stroke();
+  }
+  for (let lat = -60; lat <= 90; lat += 30) {
+    const [x1, y1] = project(lat, -180);
+    const [x2, y2] = project(lat, 180);
+    mapCtx.beginPath();
+    mapCtx.moveTo(x1, y1); mapCtx.lineTo(x2, y2); mapCtx.stroke();
+  }
+
+  const showZones = document.getElementById("showAreasChk") && document.getElementById("showAreasChk").checked;
+  if (showZones) {
+    mapCtx.strokeStyle = "rgba(242,166,90,0.45)";
+    mapCtx.lineWidth = 1;
+    for (const area of GEO_AREAS) {
+      if (area.testType !== "POLYGON") continue;
+      mapCtx.beginPath();
+      area.param.forEach(([lat, lon], i) => {
+        const [x, y] = project(lat, lon);
+        if (i === 0) mapCtx.moveTo(x, y); else mapCtx.lineTo(x, y);
+      });
+      mapCtx.closePath();
+      mapCtx.stroke();
+    }
+  }
+
+  const wps = state.route.waypoints;
+  if (wps.length >= 2) {
+    mapCtx.strokeStyle = themeColor("--accent2");
+    mapCtx.lineWidth = 2;
+    mapCtx.beginPath();
+    wps.forEach((wp, i) => {
+      const [x, y] = project(wp.lat, wp.lon);
+      if (i === 0) mapCtx.moveTo(x, y); else mapCtx.lineTo(x, y);
+    });
+    mapCtx.stroke();
+    mapCtx.fillStyle = themeColor("--accent2");
+    wps.forEach(wp => {
+      const [x, y] = project(wp.lat, wp.lon);
+      mapCtx.beginPath();
+      mapCtx.arc(x, y, 3.5, 0, Math.PI * 2);
+      mapCtx.fill();
+    });
+  }
+
+  if (window.vesselPos) {
+    const [x, y] = project(window.vesselPos.lat, window.vesselPos.lon);
+    mapCtx.fillStyle = "#FF5050";
+    mapCtx.beginPath();
+    mapCtx.moveTo(x, y - 8);
+    mapCtx.lineTo(x - 6, y + 6);
+    mapCtx.lineTo(x + 6, y + 6);
+    mapCtx.closePath();
+    mapCtx.fill();
+  }
+}
+
+function mapZoomFullWorld() {
+  mapView = { centerLon: 0, centerLat: 20, zoom: 1 };
+  drawMap();
+}
+
+function mapZoomToRoute() {
+  const wps = state.route.waypoints;
+  if (wps.length === 0) { alert("No route loaded to zoom to."); return; }
+  let minLat = wps[0].lat, maxLat = wps[0].lat, minLon = wps[0].lon, maxLon = wps[0].lon;
+  wps.forEach(wp => {
+    minLat = Math.min(minLat, wp.lat); maxLat = Math.max(maxLat, wp.lat);
+    minLon = Math.min(minLon, wp.lon); maxLon = Math.max(maxLon, wp.lon);
+  });
+  mapView.centerLat = (minLat + maxLat) / 2;
+  mapView.centerLon = (minLon + maxLon) / 2;
+  const spanLon = Math.max(2, maxLon - minLon) * 1.4;
+  mapView.zoom = Math.max(0.3, Math.min(60, 360 / spanLon));
+  drawMap();
+}
+
+window.drawMap = drawMap;
+window.initWorldMap = initWorldMap;
+window.mapZoomFullWorld = mapZoomFullWorld;
+window.mapZoomToRoute = mapZoomToRoute;
+"path":"js/xlsx_import.js
+function xmlUnescape(s) {
+  return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+}
+
+function parseSharedStrings(xml) {
+  if (!xml) return [];
+  const strings = [];
+  const siBlocks = xml.match(/<si[ >][\s\S]*?<\/si>/g) || [];
+  for (const block of siBlocks) {
+    const parts = block.match(/<t[^>]*>([\s\S]*?)<\/t>/g) || [];
+    const text = parts.map(p => xmlUnescape(p.replace(/<[^>]+>/g, ""))).join("");
+    strings.push(text);
+  }
+  return strings;
+}
+
+function excelSerialToDate(serial) {
+  const utcDays = Math.floor(serial - 25569);
+  const utcValue = utcDays * 86400;
+  const dateInfo = new Date(utcValue * 1000);
+  const fractionalDay = serial - Math.floor(serial);
+  const totalSeconds = Math.round(fractionalDay * 86400);
+  dateInfo.setUTCHours(0, 0, 0, 0);
+  dateInfo.setUTCSeconds(totalSeconds);
+  return dateInfo;
+}
+
+function colLetterToIndex(letters) {
+  let n = 0;
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+function parseWorksheetXml(xml, sharedStrings) {
+  const rows = [];
+  const rowBlocks = xml.match(/<row[^>]*>[\s\S]*?<\/row>/g) || [];
+  for (const rowXml of rowBlocks) {
+    const cellMatches = rowXml.match(/<c[^>]*\/>|<c[^>]*>[\s\S]*?<\/c>/g) || [];
+    const row = [];
+    for (const cellXml of cellMatches) {
+      const refMatch = cellXml.match(/r="([A-Z]+)\d+"/);
+      const typeMatch = cellXml.match(/t="([^"]+)"/);
+      const valMatch = cellXml.match(/<v>([\s\S]*?)<\/v>/);
+      const inlineMatch = cellXml.match(/<is>[\s\S]*?<t[^>]*>([\s\S]*?)<\/t>[\s\S]*?<\/is>/);
+      if (!refMatch) continue;
+      const colIdx = colLetterToIndex(refMatch[1]);
+      let value;
+      if (inlineMatch) {
+        value = xmlUnescape(inlineMatch[1]);
+      } else if (valMatch) {
+        const raw = valMatch[1];
+        if (typeMatch && typeMatch[1] === "s") {
+          value = sharedStrings[parseInt(raw, 10)] || "";
+        } else if (typeMatch && typeMatch[1] === "str") {
+          value = xmlUnescape(raw);
+        } else {
+          value = raw;
+        }
+      } else {
+        value = "";
+      }
+      row[colIdx] = value;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+async function importXlsxRoute(arrayBuffer) {
+  const entries = await readZipEntries(arrayBuffer, ["xl/sharedStrings.xml", "xl/worksheets/sheet1.xml"]);
+  if (!entries["xl/worksheets/sheet1.xml"]) {
+    throw new Error("Could not find xl/worksheets/sheet1.xml - only the first sheet is read in this version.");
+  }
+  const sharedStrings = parseSharedStrings(entries["xl/sharedStrings.xml"] ? bytesToText(entries["xl/sharedStrings.xml"]) : "");
+  const rows = parseWorksheetXml(bytesToText(entries["xl/worksheets/sheet1.xml"]), sharedStrings);
+  return rowsToWaypointResult(rows);
+}
+
+function rowsToWaypointResult(rows) {
+  const result = { waypoints: [], log: [] };
+  if (rows.length === 0) return result;
+  const headers = rows[0].map(h => (h === undefined ? "" : String(h)));
+  const map = mapHeaders(headers);
+  if (map.lat < 0 || map.lon < 0 || map.spd < 0 || map.etd < 0) {
+    result.log.push({ row: 1, field: "header", value: "-", reason: "Required column missing (need lat/lon/speed/ETD)", fix: "Check the header row" });
+    return result;
+  }
+
+  let prevEtd = null;
+  for (let r = 1; r < rows.length; r++) {
+    const cols = rows[r] || [];
+    const rowNum = r + 1;
+    let ok = true;
+    let lat, lon, spd, etd;
+
+    const latRaw = cols[map.lat] === undefined ? "" : String(cols[map.lat]);
+    const lonRaw = cols[map.lon] === undefined ? "" : String(cols[map.lon]);
+    try { lat = parseFloat(latRaw); if (isNaN(lat) || lat < -90 || lat > 90) throw new Error("Latitude out of range: " + latRaw); }
+    catch (e) { result.log.push({ row: rowNum, field: "Latitude", value: latRaw, reason: e.message, fix: "Use a decimal latitude" }); ok = false; }
+    try { lon = parseFloat(lonRaw); if (isNaN(lon) || lon < -180 || lon > 180) throw new Error("Longitude out of range: " + lonRaw); }
+    catch (e) { result.log.push({ row: rowNum, field: "Longitude", value: lonRaw, reason: e.message, fix: "Use a decimal longitude" }); ok = false; }
+
+    if (ok) {
+      spd = parseFloat(cols[map.spd]);
+      if (isNaN(spd) || spd <= 0 || spd > 40) {
+        result.log.push({ row: rowNum, field: "Speed", value: cols[map.spd], reason: "Speed must be numeric, >0 and <=40kn", fix: "Check the source value" });
+        ok = false;
+      }
+    }
+
+    if (ok) {
+      const etdRaw = cols[map.etd];
+      if (typeof etdRaw === "string" && /^\d+(\.\d+)?$/.test(etdRaw) && parseFloat(etdRaw) > 1000) {
+        etd = excelSerialToDate(parseFloat(etdRaw));
+      } else {
+        etd = new Date(etdRaw);
+      }
+      if (isNaN(etd.getTime())) {
+        result.log.push({ row: rowNum, field: "ETD/ETA", value: etdRaw, reason: "Unparseable date/time", fix: "Use a real date cell or an ISO date string" });
+        ok = false;
+      }
+    }
+
+    if (ok && prevEtd && etd < prevEtd) {
+      result.log.push({ row: rowNum, field: "ETD/ETA", value: cols[map.etd], reason: "Out of chronological order vs previous waypoint", fix: "Check waypoint sequence" });
+      ok = false;
+    }
+
+    if (ok) {
+      result.waypoints.push({
+        name: map.name >= 0 && cols[map.name] !== undefined ? String(cols[map.name]) : `WP${result.waypoints.length + 1}`,
+        lat, lon, speed: spd, etd: etd.toISOString(),
+      });
+      prevEtd = etd;
+    }
+  }
+  return result;
+}
+
+window.importXlsxRoute = importXlsxRoute;
+window.rowsToWaypointResult = rowsToWaypointResult;
+"path":"js/rtz_import.js
+function getAttr(tagXml, attrName) {
+  const m = tagXml.match(new RegExp(`${attrName}="([^"]*)"`));
+  return m ? xmlUnescape(m[1]) : "";
+}
+
+function parseIso8601(s) {
+  return new Date(s);
+}
+
+function importRtzXml(xmlText) {
+  const result = { waypoints: [], log: [] };
+
+  const wpBlocks = xmlText.match(/<waypoint\b[^>]*>[\s\S]*?<\/waypoint>|<waypoint\b[^>]*\/>/g) || [];
+  if (wpBlocks.length === 0) {
+    result.log.push({ row: 0, field: "waypoints", value: "-", reason: "No <waypoint> elements found - this file may use a different RTZ schema version", fix: "Check the source RTZ file" });
+    return result;
+  }
+
+  const legBlocks = xmlText.match(/<leg\b[^>]*\/>|<leg\b[^>]*>[\s\S]*?<\/leg>/g) || [];
+
+  wpBlocks.forEach((wpXml, i) => {
+    const wpTagMatch = wpXml.match(/<waypoint\b[^>]*>/);
+    const wpTag = wpTagMatch ? wpTagMatch[0] : wpXml;
+    const wpId = getAttr(wpTag, "id");
+    const wpName = getAttr(wpTag, "name");
+
+    const posMatch = wpXml.match(/<position\b[^>]*\/>|<position\b[^>]*>/);
+    if (!posMatch) {
+      result.log.push({ row: i + 1, field: "position", value: "-", reason: "Waypoint has no <position> element", fix: "Check the source RTZ file" });
+      return;
+    }
+    const posTag = posMatch[0];
+    const latStr = getAttr(posTag, "lat");
+    const lonStr = getAttr(posTag, "lon");
+
+    let ok = true;
+    const lat = parseFloat(latStr), lon = parseFloat(lonStr);
+    if (isNaN(lat) || lat < -90 || lat > 90) {
+      result.log.push({ row: i + 1, field: "Latitude", value: latStr, reason: "Not a valid latitude", fix: "Check the <position lat=...> value" });
+      ok = false;
+    }
+    if (isNaN(lon) || lon < -180 || lon > 180) {
+      result.log.push({ row: i + 1, field: "Longitude", value: lonStr, reason: "Not a valid longitude", fix: "Check the <position lon=...> value" });
+      ok = false;
+    }
+
+    let speed = 0;
+    const isLastWp = (i === wpBlocks.length - 1);
+    const leg = legBlocks.find(l => getAttr(l, "startWaypointId") === wpId);
+    if (leg) {
+      const s1 = getAttr(leg, "speedMax");
+      const s2 = getAttr(leg, "speed");
+      speed = parseFloat(s1 || s2);
+    }
+    if (ok && !isLastWp && (isNaN(speed) || speed <= 0)) {
+      result.log.push({ row: i + 1, field: "Speed", value: String(speed), reason: "No usable leg speed found for this waypoint", fix: "Check the source RTZ's <leg speedMax=...> values" });
+      ok = false;
+    }
+    if (isLastWp && (isNaN(speed) || speed <= 0)) speed = 0;
+
+    let etd = null, haveEtd = false;
+    const schedMatch = wpXml.match(/<schedule\b[^>]*\/>|<schedule\b[^>]*>/);
+    if (schedMatch) {
+      const schedTag = schedMatch[0];
+      const etaStr = getAttr(schedTag, "eta") || getAttr(schedTag, "etd");
+      if (etaStr) {
+        const d = parseIso8601(etaStr);
+        if (!isNaN(d.getTime())) { etd = d; haveEtd = true; }
+      }
+    }
+    if (ok && !haveEtd) {
+      result.log.push({ row: i + 1, field: "ETD/ETA", value: "-", reason: "No schedule/ETA found on this waypoint", fix: "Position/speed still imported; add times manually in Route Import if you need them" });
+    }
+
+    if (ok) {
+      result.waypoints.push({
+        name: wpName || `WP${result.waypoints.length + 1}`,
+        lat, lon, speed,
+        etd: haveEtd ? etd.toISOString() : null,
+      });
+    }
+  });
+
+  return result;
+}
+
+async function importRtzpRoute(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const dv = new DataView(arrayBuffer);
+  const EOCD_SIG = 0x06054b50;
+  let eocdPos = -1;
+  for (let i = bytes.length - 22; i >= 0; i--) {
+    if (dv.getUint32(i, true) === EOCD_SIG) { eocdPos = i; break; }
+  }
+  if (eocdPos === -1) throw new Error("Not a valid .rtzp (ZIP) archive");
+  const cdCount = dv.getUint16(eocdPos + 10, true);
+  const cdOffset = dv.getUint32(eocdPos + 16, true);
+  let pos = cdOffset;
+  let rtzName = null;
+  for (let i = 0; i < cdCount; i++) {
+    const nameLen = dv.getUint16(pos + 28, true);
+    const extraLen = dv.getUint16(pos + 30, true);
+    const commentLen = dv.getUint16(pos + 32, true);
+    const name = new TextDecoder("utf-8").decode(bytes.slice(pos + 46, pos + 46 + nameLen));
+    if (name.toLowerCase().endsWith(".rtz")) rtzName = name;
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+  if (!rtzName) throw new Error("No .rtz file found inside this .rtzp archive");
+  const entries = await readZipEntries(arrayBuffer, [rtzName]);
+  return importRtzXml(bytesToText(entries[rtzName]));
+}
+
+window.importRtzXml = importRtzXml;
+window.importRtzpRoute = importRtzpRoute;
+"path":"js/zip_reader.js
+async function readZipEntries(arrayBuffer, wantedNames) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const dv = new DataView(arrayBuffer);
+  const EOCD_SIG = 0x06054b50;
+  let eocdPos = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65557); i--) {
+    if (dv.getUint32(i, true) === EOCD_SIG) { eocdPos = i; break; }
+  }
+  if (eocdPos === -1) throw new Error("Not a valid ZIP archive (no End Of Central Directory found)");
+
+  const cdCount = dv.getUint16(eocdPos + 10, true);
+  const cdOffset = dv.getUint32(eocdPos + 16, true);
+
+  const wanted = new Set(wantedNames);
+  const found = {};
+
+  let pos = cdOffset;
+  const CD_SIG = 0x02014b50;
+  for (let i = 0; i < cdCount; i++) {
+    if (dv.getUint32(pos, true) !== CD_SIG) break;
+    const compMethod = dv.getUint16(pos + 10, true);
+    const compSize = dv.getUint32(pos + 20, true);
+    const uncompSize = dv.getUint32(pos + 24, true);
+    const nameLen = dv.getUint16(pos + 28, true);
+    const extraLen = dv.getUint16(pos + 30, true);
+    const commentLen = dv.getUint16(pos + 32, true);
+    const localHeaderOffset = dv.getUint32(pos + 42, true);
+    const nameBytes = bytes.slice(pos + 46, pos + 46 + nameLen);
+    const name = new TextDecoder("utf-8").decode(nameBytes);
+
+    if (wanted.has(name)) {
+      const raw = await extractLocalEntry(bytes, dv, localHeaderOffset, compMethod, compSize);
+      found[name] = raw;
+    }
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+  return found;
+}
+
+async function extractLocalEntry(bytes, dv, localOffset, compMethod, compSize) {
+  const LOCAL_SIG = 0x04034b50;
+  if (dv.getUint32(localOffset, true) !== LOCAL_SIG) throw new Error("Bad local file header");
+  const nameLen = dv.getUint16(localOffset + 26, true);
+  const extraLen = dv.getUint16(localOffset + 28, true);
+  const dataStart = localOffset + 30 + nameLen + extraLen;
+  const compData = bytes.slice(dataStart, dataStart + compSize);
+
+  if (compMethod === 0) return compData;
+  if (compMethod === 8) return await inflateRaw(compData);
+  throw new Error(`Unsupported ZIP compression method: ${compMethod}`);
+}
+
+async function inflateRaw(compressedBytes) {
+  const ds = new DecompressionStream("deflate-raw");
+  const writer = ds.writable.getWriter();
+  writer.write(compressedBytes);
+  writer.close();
+  const chunks = [];
+  const reader = ds.readable.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.length; }
+  return out;
+}
+
+function bytesToText(bytes) {
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
+window.readZipEntries = readZipEntries;
+window.bytesToText = bytesToText;
+"path":"js/app.js
+document.addEventListener("DOMContentLoaded", async () => {
+  loadState();
+  applyTheme(state.theme);
+  const themeSelect = document.getElementById("themeSelect");
+  if (themeSelect) themeSelect.value = state.theme;
+
+  const adminBtn = document.getElementById("adminBtn");
+  if (adminBtn) {
+    adminBtn.addEventListener("click", onAdminClick);
+  }
+  const userBtn = document.getElementById("userBtn");
+  if (userBtn) userBtn.addEventListener("click", () => setAdminUI(false));
+
+  document.querySelectorAll("nav#tabs button").forEach(btn => {
+    btn.addEventListener("click", () => showPage(btn.dataset.page));
+  });
+  document.querySelectorAll(".tile").forEach(tile => {
+    tile.addEventListener("click", () => showPage(tile.dataset.page));
+  });
+
+  const exportBtn = document.getElementById("exportBtn");
+  if (exportBtn) exportBtn.addEventListener("click", exportStateToFile);
+
+  const importFile = document.getElementById("importFile");
+  if (importFile) {
+    importFile.addEventListener("change", (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      importStateFromFile(f, (ok, err) => {
+        if (ok) {
+          applyTheme(state.theme);
+          if (themeSelect) themeSelect.value = state.theme;
+          renderRouteTable();
+          alert("Project loaded.");
+        } else {
+          alert("Could not load file: " + err);
+        }
+      });
+    });
+  }
+
+  const checkPositionBtn = document.getElementById("checkPositionBtn");
+  if (checkPositionBtn) {
+    checkPositionBtn.addEventListener("click", () => {
+      const lat = parseFloat(document.getElementById("posLat").value);
+      const lon = parseFloat(document.getElementById("posLon").value);
+      if (isNaN(lat) || isNaN(lon)) { alert("Enter a valid latitude and longitude."); return; }
+      const hits = checkPoint(lat, lon);
+      renderPositionResults(hits);
+    });
+  }
+
+  const loadSampleBtn = document.getElementById("loadSampleBtn");
+  if (loadSampleBtn) {
+    loadSampleBtn.addEventListener("click", () => {
+      state.route.waypoints = loadSampleRoute();
+      saveState();
+      renderRouteTable();
+      setImportStatus(`${state.route.waypoints.length} sample waypoints loaded.`, false);
+      updateDashboardStatus();
+    });
+  }
+
+  const routeFileInput = document.getElementById("routeFileInput");
+  if (routeFileInput) {
+    routeFileInput.addEventListener("change", (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const name = f.name.toLowerCase();
+      setImportStatus("Importing...", false);
+
+      if (name.endsWith(".csv") || name.endsWith(".txt")) {
+        const reader = new FileReader();
+        reader.onload = (ev) => applyImportResult(importRouteCSV(ev.target.result));
+        reader.readAsText(f);
+      } else if (name.endsWith(".xlsx")) {
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          try { applyImportResult(await importXlsxRoute(ev.target.result)); }
+          catch (err) { setImportStatus("Error: " + err.message, true); }
+        };
+        reader.readAsArrayBuffer(f);
+      } else if (name.endsWith(".rtzp")) {
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          try { applyImportResult(await importRtzpRoute(ev.target.result)); }
+          catch (err) { setImportStatus("Error: " + err.message, true); }
+        };
+        reader.readAsArrayBuffer(f);
+      } else if (name.endsWith(".rtz")) {
+        const reader = new FileReader();
+        reader.onload = (ev) => applyImportResult(importRtzXml(ev.target.result));
+        reader.readAsText(f);
+      } else {
+        setImportStatus("Unrecognised file type. Use .csv, .txt, .xlsx, .rtz or .rtzp.", true);
+      }
+    });
+  }
+
+  function applyImportResult(result) {
+    state.route.waypoints = result.waypoints;
+    saveState();
+    renderRouteTable();
+    renderImportLog(result.log);
+    setImportStatus(`${result.waypoints.length} waypoints imported, ${result.log.length} rejected/flagged — see log below.`, result.log.length > 0);
+    updateDashboardStatus();
+  }
+
+  const runRouteCheckBtn = document.getElementById("runRouteCheckBtn");
+  if (runRouteCheckBtn) {
+    runRouteCheckBtn.addEventListener("click", () => {
+      const result = runRouteCheck(state.route.waypoints);
+      renderRouteCheckResults(result);
+    });
+  }
+
+  const mapFullWorldBtn = document.getElementById("mapFullWorldBtn");
+  if (mapFullWorldBtn) mapFullWorldBtn.addEventListener("click", mapZoomFullWorld);
+  const mapFitRouteBtn = document.getElementById("mapFitRouteBtn");
+  if (mapFitRouteBtn) mapFitRouteBtn.addEventListener("click", mapZoomToRoute);
+  const showAreasChk = document.getElementById("showAreasChk");
+  if (showAreasChk) showAreasChk.addEventListener("change", drawMap);
+
+  initWorldMap();
+
+  const simPlayBtn = document.getElementById("simPlayBtn");
+  if (simPlayBtn) simPlayBtn.addEventListener("click", simPlay);
+  const simPauseBtn = document.getElementById("simPauseBtn");
+  if (simPauseBtn) simPauseBtn.addEventListener("click", simPause);
+  const simStepBtn = document.getElementById("simStepBtn");
+  if (simStepBtn) simStepBtn.addEventListener("click", simStep);
+  const simResetBtn = document.getElementById("simResetBtn");
+  if (simResetBtn) simResetBtn.addEventListener("click", simReset);
+  const simInstantBtn = document.getElementById("simInstantBtn");
+  if (simInstantBtn) simInstantBtn.addEventListener("click", simInstant);
+
+  const genReportBtn = document.getElementById("genReportBtn");
+  if (genReportBtn) genReportBtn.addEventListener("click", generateReport);
+  const printReportBtn = document.getElementById("printReportBtn");
+  if (printReportBtn) printReportBtn.addEventListener("click", () => window.print());
+
+  const syncBtn = document.getElementById("syncBtn");
+  if (syncBtn) {
+    syncBtn.addEventListener("click", () => {
+      const time = new Date().toISOString();
+      localStorage.setItem("lastDataSync", time);
+      document.getElementById("kpiLastSync").textContent = new Date(time).toLocaleDateString();
+      const statusBox = document.getElementById("statusBox");
+      if (statusBox) {
+        statusBox.textContent = "Offline sync check complete. Local charts and MARPOL rules kept on device.";
+      }
+    });
+  }
+
+  renderRouteTable();
+  renderPositionResults([]);
+  showPage("dashboard");
+  updateDashboardStatus();
+});
+
+function renderRouteTable() {
+  const el = document.getElementById("routeTable");
+  const wps = state.route.waypoints;
+  if (!el) return;
+  if (wps.length === 0) {
+    el.innerHTML = `<p class="hint">No route loaded yet.</p>`;
+    return;
+  }
+  let rows = "";
+  for (let i = 0; i < wps.length; i++) {
+    const wp = wps[i];
+    let legDist = "";
+    if (i < wps.length - 1) {
+      const next = wps[i + 1];
+      legDist = nmDistance(wp.lat, wp.lon, next.lat, next.lon).toFixed(1);
+    }
+    rows += `<tr><td>${i + 1}</td><td>${wp.name}</td><td>${wp.lat.toFixed(4)}</td><td>${wp.lon.toFixed(4)}</td><td>${wp.speed}</td><td>${wp.etd ? new Date(wp.etd).toLocaleString() : "—"}</td><td>${legDist}</td></tr>`;
+  }
+  el.innerHTML = `<table><thead><tr><th>WP</th><th>Name</th><th>Lat</th><th>Lon</th><th>Speed (kn)</th><th>ETD/ETA</th><th>Leg dist (nm)</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderImportLog(log) {
+  const el = document.getElementById("importLog");
+  if (!el) return;
+  if (log.length === 0) { el.innerHTML = ""; return; }
+  el.innerHTML = `<table><thead><tr><th>Row</th><th>Field</th><th>Value</th><th>Reason</th><th>Fix</th></tr></thead><tbody>` +
+    log.map(l => `<tr class="log-row-reject"><td>${l.row}</td><td>${l.field}</td><td>${l.value}</td><td>${l.reason}</td><td>${l.fix}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+function renderPositionResults(hits) {
+  const el = document.getElementById("positionResults");
+  if (!el) return;
+  if (hits.length === 0) {
+    el.innerHTML = `<div class="status-banner">No MARPOL special area or ECA applies at this position.</div>`;
+    return;
+  }
+  el.innerHTML = `<div class="status-banner inside">IN: ${hits.map(h => h.name).join("; ")}</div>` +
+    `<table><thead><tr><th>Area</th><th>Applies to</th><th>Rule</th></tr></thead><tbody>` +
+    hits.map(h => `<tr><td>${h.name}</td><td>${h.appliesTo}</td><td>${h.rule}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+function renderRouteCheckResults(result) {
+  const el = document.getElementById("routeCheckResults");
+  if (!el) return;
+  if (result.message) {
+    el.innerHTML = `<div class="status-banner">${result.message}</div>`;
+    return;
+  }
+  el.innerHTML = `<table><thead><tr><th>Leg</th><th>Event</th><th>Entry WP</th><th>Exit WP</th><th>Rule</th></tr></thead><tbody>` +
+    result.events.map(ev => `<tr><td>${ev.leg}</td><td>${ev.event}</td><td>${ev.entryWp}</td><td>${ev.exitWp}</td><td>${ev.rule}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+function setImportStatus(msg, isWarning) {
+  const statusEl = document.getElementById("importStatus");
+  if (statusEl) statusEl.textContent = msg;
+}
+
+function showPage(pageId) {
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll("nav#tabs button").forEach(b => b.classList.remove("active"));
+  const page = document.getElementById(`page-${pageId}`);
+  if (page) page.classList.add("active");
+  const btn = document.querySelector(`nav#tabs button[data-page="${pageId}"]`);
+  if (btn) btn.classList.add("active");
+  if (pageId === "worldmap" && typeof resizeMapCanvas === "function") {
+    resizeMapCanvas();
+    drawMap();
+  }
+}
+
+function applyTheme(themeName) {
+  document.body.setAttribute("data-theme", themeName);
+}
+
+async function onAdminClick() {
+  if (state.isAdmin) return;
+  const pwd = prompt("Enter Admin password:");
+  if (!pwd) return;
+
+  if (!state.adminPasswordHash) {
+    if (pwd === DEFAULT_ADMIN_PASSWORD) {
+      state.adminPasswordHash = await saltedHash(pwd, ADMIN_SALT);
+      saveState();
+      setAdminUI(true);
+    } else {
+      alert("Incorrect password.");
+    }
+    return;
+  }
+  const testHash = await saltedHash(pwd, ADMIN_SALT);
+  if (testHash === state.adminPasswordHash) {
+    setAdminUI(true);
+  } else {
+    alert("Incorrect password.");
+  }
+}
+
+function setAdminUI(isAdmin) {
+  state.isAdmin = isAdmin;
+  const adminBtn = document.getElementById("adminBtn");
+  if (adminBtn) {
+    adminBtn.classList.toggle("active", isAdmin);
+    adminBtn.textContent = isAdmin ? "🛡 ADMIN" : "🛡 ADMIN";
+  }
+}
+
+function updateDashboardStatus() {
+  const kpiAreas = document.getElementById("kpiAreas");
+  if (kpiAreas) kpiAreas.textContent = GEO_AREAS.length;
+  const kpiWaypoints = document.getElementById("kpiWaypoints");
+  if (kpiWaypoints) kpiWaypoints.textContent = state.route.waypoints.length;
+  const kpiLastSync = document.getElementById("kpiLastSync");
+  if (kpiLastSync) {
+    const lastSync = localStorage.getItem("lastDataSync");
+    kpiLastSync.textContent = lastSync ? new Date(lastSync).toLocaleDateString() : "Never";
+  }
+  const statusBox = document.getElementById("statusBox");
+  if (statusBox) {
+    const offlineMode = navigator.onLine ? "Online" : "Offline";
+    statusBox.textContent = `Device status: ${offlineMode}. App is ready for offline MARPOL checks and route review.`;
+  }
+}
+
+window.updateDashboardStatus = updateDashboardStatus;
+window.applyTheme = applyTheme;
+window.onAdminClick = onAdminClick;
+window.setAdminUI = setAdminUI;
+window.showPage = showPage;
+window.renderRouteTable = renderRouteTable;
+window.renderPositionResults = renderPositionResults;
+window.renderRouteCheckResults = renderRouteCheckResults;
+window.setImportStatus = setImportStatus;
+window.updateDashboardStatus = updateDashboardStatus;
+"path":"js/geo_areas.js
+const GEO_AREAS = [
+  { name: "Mediterranean Sea area", appliesTo: "Annex I, II, IV, V special area", testType: "POLYGON", param: [[43.5,5.6],[44.3,15.0],[40.0,19.5],[35.8,23.0],[34.9,28.0],[41.0,28.0],[41.0,36.0],[36.0,36.2],[31.2,34.2],[31.0,25.0],[32.0,20.0],[33.5,11.0],[36.0,-5.6],[43.5,5.6]], confidence: "Approximate", rule: "Garbage discharge prohibited except food waste", inForce: "In force", source: "IMO" },
+  { name: "Baltic Sea area", appliesTo: "Annex I special area; ECA (SOx)", testType: "POLYGON", param: [[65.9,22.5],[65.9,25.5],[60.5,27.9],[59.8,30.3],[57.9,24.9],[57.748,10.6],[54.5,9.5],[53.8,14.2],[65.9,22.5]], confidence: "Approximate", rule: "Sewage and SOx restrictions apply", inForce: "In force", source: "IMO" },
+  { name: "Black Sea area", appliesTo: "Annex I/V special area", testType: "POLYGON", param: [[46.6,30.5],[46.2,41.5],[41.0,41.5],[41.0,27.5],[43.4,27.5],[46.6,30.5]], confidence: "Approximate", rule: "Garbage discharge restrictions apply", inForce: "In force", source: "IMO" },
+  { name: "Red Sea area", appliesTo: "Annex I/V special area", testType: "POLYGON", param: [[30.0,32.5],[30.0,35.0],[27.9,34.6],[20.0,38.5],[12.675,43.327],[12.475,43.55],[16.0,42.8],[20.0,39.5],[27.0,34.0],[30.0,32.5]], confidence: "Approximate", rule: "Garbage discharge restrictions apply", inForce: "In force", source: "IMO" },
+  { name: "Gulfs area (Persian/Arabian Gulf + Gulf of Oman)", appliesTo: "Annex I/V special area", testType: "POLYGON", param: [[30.5,48.0],[30.0,50.0],[26.0,51.5],[24.0,52.5],[22.5,59.8],[25.067,61.417],[26.5,56.5],[27.0,52.0],[30.5,48.0]], confidence: "Approximate", rule: "Garbage discharge restrictions apply", inForce: "In force", source: "IMO" },
+  { name: "North Sea area — main basin", appliesTo: "Annex V special area; ECA (SOx)", testType: "POLYGON", param: [[62.0,4.0],[62.0,-4.0],[51.0,1.5],[51.0,4.0],[55.0,8.5],[62.0,4.0]], confidence: "Approximate", rule: "SOx 0.10% and garbage restrictions apply", inForce: "In force", source: "IMO" },
+  { name: "North Sea area — Skagerrak", appliesTo: "Annex V special area; ECA (SOx)", testType: "POLYGON", param: [[59.5,8.0],[59.5,11.5],[57.747,11.5],[57.747,8.0],[59.5,8.0]], confidence: "Approximate", rule: "SOx restrictions and garbage rules apply", inForce: "In force", source: "IMO" },
+  { name: "North Sea area — English Channel & approaches", appliesTo: "Annex V special area; ECA (SOx)", testType: "POLYGON", param: [[51.5,-5.0],[51.5,2.0],[48.5,2.0],[48.5,-5.0],[51.5,-5.0]], confidence: "Approximate", rule: "SOx restrictions and garbage rules apply", inForce: "In force", source: "IMO" },
+  { name: "Antarctic area", appliesTo: "Annex I/II/IV/V special area; Polar Code area", testType: "LAT_SOUTH_OF", param: -60.0, confidence: "Exact", rule: "All garbage discharge prohibited; oil and sewage restrictions apply", inForce: "In force", source: "IMO" },
+  { name: "Wider Caribbean Region", appliesTo: "Annex V special area", testType: "POLYGON", param: [[30.0,-77.5],[30.0,-59.0],[7.333,-59.0],[7.333,-50.0],[5.0,-52.0],[8.0,-60.0],[18.0,-64.9],[30.0,-77.5]], confidence: "Approximate", rule: "Garbage discharge prohibited except food waste", inForce: "In force", source: "IMO" },
+  { name: "Arctic waters (Polar Code area)", appliesTo: "Annex I/II/IV/V Arctic provisions", testType: "POLYGON", param: [[58.0,-42.0],[64.617,-35.45],[67.065,-26.55],[70.826,-8.994],[73.527,19.017],[68.633,43.383],[66.0,80.0],[66.0,-168.0],[60.0,-168.0],[60.0,-42.0],[58.0,-42.0]], confidence: "Approximate", rule: "Special discharge/fuel provisions under the Polar Code", inForce: "In force", source: "IMO" },
+  { name: "North American ECA - Pacific coast", appliesTo: "ECA (SOx/NOx/PM)", testType: "POLYGON", param: [[32.536111,-117.103056],[32.534444,-117.124722],[32.5275,-117.238889],[32.553611,-117.263889],[32.5725,-117.366944],[32.589722,-117.464722],[32.627222,-117.826111],[31.133056,-118.605833],[30.556944,-121.791389],[31.769722,-123.0],[34.0,-124.5],[37.0,-125.0],[49.0,-126.0],[49.0,-122.0],[44.0,-117.0],[32.536111,-117.103056]], confidence: "Approximate", rule: "SOx/NOx/PM control area", inForce: "In force", source: "IMO" },
+  { name: "US Caribbean ECA", appliesTo: "ECA (SOx/NOx/PM)", testType: "POLYGON", param: [[18.5,-67.0],[18.5,-64.0],[14.0,-64.0],[14.0,-67.0],[18.5,-67.0]], confidence: "Approximate", rule: "Emission controls apply", inForce: "In force", source: "IMO" },
+  { name: "Gulf of Mexico ECA", appliesTo: "ECA (SOx/NOx/PM)", testType: "POLYGON", param: [[31.0,-98.0],[31.0,-81.0],[18.0,-81.0],[18.0,-98.0],[31.0,-98.0]], confidence: "Approximate", rule: "Emission controls apply", inForce: "In force", source: "IMO" },
+  { name: "Baltic ECA", appliesTo: "ECA (SOx)", testType: "POLYGON", param: [[65.9,22.5],[65.9,25.5],[54.5,9.5],[53.8,14.2],[65.9,22.5]], confidence: "Approximate", rule: "SOx 0.10% requirement", inForce: "In force", source: "IMO" },
+  { name: "Mediterranean ECA", appliesTo: "ECA (SOx)", testType: "POLYGON", param: [[45.5,5.0],[45.5,19.0],[35.0,19.0],[35.0,5.0],[45.5,5.0]], confidence: "Approximate", rule: "SOx restrictions apply", inForce: "In force", source: "IMO" },
+  { name: "Singapore Strait ECA", appliesTo: "ECA (SOx/NOx/PM)", testType: "POLYGON", param: [[2.0,102.8],[2.0,104.8],[1.0,104.8],[1.0,102.8],[2.0,102.8]], confidence: "Approximate", rule: "Emission controls apply", inForce: "In force", source: "IMO" },
+  { name: "Chinese SE ECA", appliesTo: "ECA (SOx/NOx/PM)", testType: "POLYGON", param: [[31.5,116.0],[31.5,124.5],[20.0,124.5],[20.0,116.0],[31.5,116.0]], confidence: "Approximate", rule: "Emission controls apply", inForce: "In force", source: "IMO" }
+];
+
+window.GEO_AREAS = GEO_AREAS;
+"path":"README.md
+# MARPOL Offline Navigator
+
+A small offline-first PWA for MARPOL compliance, route checking, and offline chart review at sea.
+
+## Features
+- Offline navigation and compliance checks
+- Route import from CSV, Excel, RTZ, RTZP
+- MARPOL / ECA area detection with a local point-in-polygon engine
+- Vessel simulator and printable report generation
+- Portable static web app and installable PWA
+- Local persistence with export/import
+
+## Run locally
+
+```bash
+python3 -m http.server 8000
+```
+
+Then open `http://localhost:8000` in a browser.
+
+## Notes
+- Works without internet after first load
+- Uses local data kept on-device
+- Chart data can be refreshed when connectivity is available
+
+## Files
+- `index.html` — app shell
+- `styles.css` — theme and layout
+- `manifest.json` — PWA metadata
+- `service-worker.js` — offline caching
+- `js/` — engine, route logic, simulator, and UI handlers
+
+## License
+MIT
