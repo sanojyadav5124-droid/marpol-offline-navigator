@@ -1,0 +1,49 @@
+{
+  "name": "MARPOL Offline Navigator",
+  "short_name": "MARPOL Nav",
+  "description": "Offline-first PWA for maritime MARPOL compliance and marine navigation at sea",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0B1B2B",
+  "background_color": "#0B1B2B",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%230B1B2B' width='192' height='192'/><text x='96' y='120' font-size='80' fill='%232DB6C9' text-anchor='middle' font-weight='bold'>⚓</text></svg>",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect fill='%230B1B2B' width='512' height='512'/><text x='256' y='320' font-size='240' fill='%232DB6C9' text-anchor='middle' font-weight='bold'>⚓</text></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 540 720'><rect fill='%230B1B2B' width='540' height='720'/><text x='270' y='360' font-size='60' fill='%232DB6C9' text-anchor='middle'>MARPOL Navigator</text></svg>",
+      "sizes": "540x720",
+      "type": "image/svg+xml",
+      "form_factor": "narrow"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Position Check",
+      "short_name": "Position",
+      "description": "Check current position against MARPOL zones",
+      "url": "/?page=position",
+      "icons": [{"src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%232DB6C9' width='192' height='192'/><text x='96' y='120' font-size='80' fill='%230B1B2B' text-anchor='middle'>📍</text></svg>", "sizes": "192x192"}]
+    },
+    {
+      "name": "Route Check",
+      "short_name": "Route",
+      "description": "Check loaded route for compliance",
+      "url": "/?page=routecheck",
+      "icons": [{"src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%232DB6C9' width='192' height='192'/><text x='96' y='120' font-size='80' fill='%230B1B2B' text-anchor='middle'>🧭</text></svg>", "sizes": "192x192"}]
+    }
+  ],
+  "categories": ["navigation", "productivity"],
+  "prefer_related_applications": false
+}
