@@ -3,20 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="Offline MARPOL compliance navigator for maritime operations">
-<meta name="theme-color" content="#0B1B2B">
 <title>MARPOL Offline Navigator</title>
 <link rel="manifest" href="manifest.json">
-<link rel="icon" type="image/png" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%230B1B2B' width='192' height='192'/><text x='96' y='120' font-size='80' fill='%232DB6C9' text-anchor='middle' font-weight='bold'>⚓</text></svg>">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body data-theme="Ocean Deep">
 <div id="app">
-
   <header>
     <div>
       <h1>⚓ MARPOL OFFLINE NAVIGATOR</h1>
-      <div class="sub">Works without internet · offline marine charts · compliance checks at sea</div>
+      <div class="sub">Offline compliance · route checker · marine charts</div>
     </div>
     <div class="right">
       <select id="themeSelect">
@@ -24,14 +20,16 @@
         <option>Night Bridge</option>
         <option>Chart Paper</option>
       </select>
-      <button class="pill-btn pill-sync" id="syncBtn">↺ Sync data</button>
+      <button class="pill-btn pill-sync" id="syncBtn">⟳ Sync data</button>
       <button class="pill-btn pill-user" id="userBtn">👤 USER</button>
+      <button class="pill-btn pill-admin" id="adminBtn">🛡 ADMIN</button>
     </div>
   </header>
 
   <nav id="tabs">
     <button data-page="dashboard" class="active">Dashboard</button>
-    <button data-page="worldmap">Marine Map</button>
+    <button data-page="worldmap">World Map</button>
+    <button data-page="charts">Marine Charts</button>
     <button data-page="position">Position Check</button>
     <button data-page="routeimport">Route Import</button>
     <button data-page="routecheck">Route Check</button>
@@ -41,159 +39,237 @@
   </nav>
 
   <main>
-
-    <!-- DASHBOARD -->
+    <!-- Dashboard -->
     <div class="page active" id="page-dashboard">
       <h2>Dashboard</h2>
-      <div class="desc">Offline-first MARPOL compliance navigator. All data stored locally — works without internet.</div>
-      <div class="status-box" id="statusBox"></div>
-      <div class="dashboard-grid">
-        <div class="tile" data-page="worldmap"><div class="tile-head"></div><div class="tile-body"><div class="tile-icon">🗺</div><div class="tile-title">MARINE MAP</div><div class="tile-sub">Offline charts</div></div></div>
-        <div class="tile" data-page="position"><div class="tile-head"></div><div class="tile-body"><div class="tile-icon">📍</div><div class="tile-title">POSITION CHECK</div><div class="tile-sub">MARPOL zones</div></div></div>
-        <div class="tile" data-page="routeimport"><div class="tile-head"></div><div class="tile-body"><div class="tile-icon">📥</div><div class="tile-title">ROUTE IMPORT</div><div class="tile-sub">CSV/Excel/RTZ</div></div></div>
-        <div class="tile" data-page="routecheck"><div class="tile-head"></div><div class="tile-body"><div class="tile-icon">🧭</div><div class="tile-title">ROUTE CHECK</div><div class="tile-sub">Compliance scan</div></div></div>
-        <div class="tile" data-page="simulator"><div class="tile-head"></div><div class="tile-body"><div class="tile-icon">▶</div><div class="tile-title">SIMULATOR</div><div class="tile-sub">Playback voyage</div></div></div>
-        <div class="tile" data-page="reports"><div class="tile-head"></div><div class="tile-body"><div class="tile-icon">📄</div><div class="tile-title">REPORTS</div><div class="tile-sub">Compliance export</div></div></div>
-      </div>
+      <div class="desc">Vessel: <strong>MV NORTHERN STAR</strong> — offline-first MARPOL compliance.</div>
+      
       <div class="kpi-row">
-        <div class="kpi"><div class="n" id="kpiAreas">17</div><div class="l">MARPOL / ECA areas</div></div>
-        <div class="kpi"><div class="n" id="kpiWaypoints">0</div><div class="l">Waypoints loaded</div></div>
-        <div class="kpi"><div class="n">100%</div><div class="l">Offline capable</div></div>
-        <div class="kpi"><div class="n" id="kpiLastSync">Never</div><div class="l">Last data sync</div></div>
+        <div class="kpi">
+          <div class="n" id="kpiAreas">0</div>
+          <div class="l">MARPOL/ECA Areas</div>
+        </div>
+        <div class="kpi">
+          <div class="n" id="kpiWaypoints">0</div>
+          <div class="l">Waypoints in route</div>
+        </div>
+        <div class="kpi">
+          <div class="n" id="kpiChartsTiles">0</div>
+          <div class="l">Cached chart tiles</div>
+        </div>
+        <div class="kpi">
+          <div class="n" id="kpiLastSync">Never</div>
+          <div class="l">Last sync</div>
+        </div>
       </div>
-    </div>
 
-    <!-- MARINE MAP -->
-    <div class="page" id="page-worldmap">
-      <h2>Marine Map</h2>
-      <div class="desc">Canvas-based marine navigation map with offline OpenSeaMap integration (future phase). Drag to pan, scroll to zoom.</div>
       <div class="card">
-        <button class="action secondary" id="mapFullWorldBtn">Zoom: Full World</button>
-        <button class="action secondary" id="mapFitRouteBtn">Zoom: Fit Route</button>
-        <label style="margin-left:14px;"><input type="checkbox" id="showAreasChk" checked> Show MARPOL/ECA zones</label>
+        <h3>App Status</h3>
+        <div id="statusBox" class="status-box">App initializing...</div>
       </div>
-      <div class="card" style="padding:0;"><canvas id="mapCanvas" style="width:100%;display:block;border-radius:10px;"></canvas></div>
+
+      <div class="dashboard-grid">
+        <div class="tile" data-page="worldmap"><div class="tile-head"></div><div class="tile-body"><div class="tile-icon">🗺</div><div class="tile-title">WORLD MAP</div><div class="tile-sub">Vector coastlines & zones</div></div></div>
+        <div class="tile" data-page="charts"><div class="tile-head"></div><div class="tile-body"><div class="tile-icon">🌊</div><div class="tile-title">MARINE CHARTS</div><div class="tile-sub">OpenSeaMap tiles & cache</div></div></div>
+        <div class="tile" data-page="routeimport"><div class="tile-head"></div><div class="tile-body"><div class="tile-icon">📥</div><div class="tile-title">ROUTE IMPORT</div><div class="tile-sub">CSV, Excel, RTZ, RTZP</div></div></div>
+        <div class="tile" data-page="routecheck"><div class="tile-head"></div><div class="tile-body"><div class="tile-icon">✔</div><div class="tile-title">ROUTE CHECK</div><div class="tile-sub">Compliance timeline</div></div></div>
+      </div>
     </div>
 
-    <!-- POSITION CHECK -->
+    <!-- World Map -->
+    <div class="page" id="page-worldmap">
+      <h2>World Map</h2>
+      <div class="desc">Vector map with MARPOL/ECA overlays. Drag to pan, scroll to zoom.</div>
+      <div class="card">
+        <button class="action" id="mapFullWorldBtn">Full World</button>
+        <button class="action secondary" id="mapFitRouteBtn">Fit Route</button>
+        <label><input type="checkbox" id="showAreasChk"> Show MARPOL/ECA areas</label>
+        <canvas id="mapCanvas" style="width: 100%; border: 1px solid var(--muted); border-radius: 8px; margin-top: 12px;"></canvas>
+      </div>
+    </div>
+
+    <!-- Marine Charts -->
+    <div class="page" id="page-charts">
+      <h2>Marine Charts</h2>
+      <div class="desc">OpenSeaMap chart tiles with offline caching. Tiles are cached locally when online.</div>
+      <div class="card">
+        <h3>Chart Cache Status</h3>
+        <div id="chartCacheStatus" class="status-box">Initializing chart cache...</div>
+        <div style="margin-top: 16px;">
+          <p><strong>Cached tiles:</strong> <span id="cachedTilesCount">0</span> tiles</p>
+          <p><strong>Cache size:</strong> <span id="cacheSizeDisplay">0 MB</span></p>
+          <button class="action" id="clearCacheBtn">Clear Cache</button>
+          <button class="action secondary" id="downloadChartsBtn">Download Charts (when online)</button>
+        </div>
+        <div id="chartDownloadProgress" style="display: none; margin-top: 12px;">
+          <p id="chartProgressText">Downloading: 0%</p>
+          <div style="background: var(--card); border-radius: 8px; height: 20px; overflow: hidden;">
+            <div id="chartProgressBar" style="background: var(--accent); height: 100%; width: 0%; transition: width 0.2s;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Chart Tile Sources</h3>
+        <p>Active tile provider: <strong>OpenSeaMap (free)</strong></p>
+        <ul style="font-size: 13px; color: var(--muted); line-height: 1.6;">
+          <li>Base URL: https://tiles.openseamap.org/seamark</li>
+          <li>Zoom levels: 0-18</li>
+          <li>License: ODbL (free for marine navigation)</li>
+          <li>Coverage: Worldwide seamark data, port symbols, depth contours</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>Offline Cache Strategy</h3>
+        <p style="font-size: 13px; color: var(--muted);">
+          Chart tiles are downloaded on-demand when online and cached in IndexedDB for offline use. 
+          The compliance engine works fully offline—charts are optional enhancement only.
+        </p>
+      </div>
+    </div>
+
+    <!-- Position Check -->
     <div class="page" id="page-position">
       <h2>Position Check</h2>
-      <div class="desc">Check any lat/lon against MARPOL special areas and ECAs. Independent of route.</div>
+      <div class="desc">Check which MARPOL/ECA areas apply at any given latitude/longitude.</div>
       <div class="card">
-        <label>Latitude (decimal, +N/-S)</label><br>
-        <input type="number" id="posLat" step="0.0001" value="0"><br><br>
-        <label>Longitude (decimal, +E/-W)</label><br>
-        <input type="number" id="posLon" step="0.0001" value="0"><br><br>
+        <label>Latitude: <input type="number" id="posLat" placeholder="e.g., 51.9167" step="0.0001" min="-90" max="90"></label>
+        <label>Longitude: <input type="number" id="posLon" placeholder="e.g., 4.1333" step="0.0001" min="-180" max="180"></label>
         <button class="action" id="checkPositionBtn">Check Position</button>
+        <div id="positionResults" style="margin-top: 16px;"></div>
       </div>
-      <div id="positionResults"></div>
     </div>
 
-    <!-- ROUTE IMPORT -->
+    <!-- Route Import -->
     <div class="page" id="page-routeimport">
       <h2>Route Import</h2>
-      <div class="desc">CSV, Excel (.xlsx), or ECDIS RTZ/RTZP — all parsed offline, no upload. Required: latitude, longitude, speed, ETD/ETA.</div>
+      <div class="desc">Import route waypoints from CSV, Excel, RTZ, or RTZP files.</div>
       <div class="card">
-        <button class="action" id="loadSampleBtn">Load Sample Route</button>
-        <input type="file" id="routeFileInput" accept=".csv,.txt,.xlsx,.rtz,.rtzp">
-        <div class="hint" id="importStatus"></div>
+        <h3>Import Route File</h3>
+        <label>Select file: <input type="file" id="routeFileInput" accept=".csv,.txt,.xlsx,.rtz,.rtzp"></label>
+        <div id="importStatus" class="hint" style="margin-top: 12px;"></div>
+        <div id="importLog" style="margin-top: 12px;"></div>
       </div>
-      <div class="card"><h3>Import Log</h3><div id="importLog"></div></div>
-      <div class="card"><h3>Waypoint Table</h3><div id="routeTable"></div></div>
+
+      <div class="card">
+        <h3>Or Load Sample Route</h3>
+        <button class="action" id="loadSampleBtn">Load Sample (Rotterdam → Suez)</button>
+      </div>
+
+      <div class="card">
+        <h3>Route Table</h3>
+        <div id="routeTable"></div>
+      </div>
     </div>
 
-    <!-- ROUTE CHECK -->
+    <!-- Route Check -->
     <div class="page" id="page-routecheck">
       <h2>Route Check</h2>
-      <div class="desc">Full leg-by-leg compliance scan. Samples every 10nm to catch areas missed by waypoints alone.</div>
-      <div class="card"><button class="action" id="runRouteCheckBtn">Run Route Check</button></div>
-      <div id="routeCheckResults"></div>
+      <div class="desc">Analyze your entire route for MARPOL/ECA area crossings.</div>
+      <div class="card">
+        <button class="action" id="runRouteCheckBtn">Run Route Check</button>
+        <div id="routeCheckResults" style="margin-top: 16px;"></div>
+      </div>
     </div>
 
-    <!-- SIMULATOR -->
+    <!-- Simulator -->
     <div class="page" id="page-simulator">
-      <h2>Simulator</h2>
-      <div class="desc">Animated vessel playback along route with real-time MARPOL zone detection.</div>
+      <h2>Voyage Simulator</h2>
+      <div class="desc">Play through your route in time-lapse to see MARPOL/ECA area entry/exit events in real-time.</div>
       <div class="card">
+        <h3>Controls</h3>
+        <button class="action" id="simResetBtn">Reset</button>
         <button class="action" id="simPlayBtn">Play</button>
         <button class="action secondary" id="simPauseBtn">Pause</button>
         <button class="action secondary" id="simStepBtn">Step</button>
-        <button class="action secondary" id="simResetBtn">Reset</button>
-        <button class="action secondary" id="simInstantBtn">Instant (end)</button>
-        &nbsp; Speed x <input type="number" id="simSpeedMult" value="1" min="1" style="width:60px;">
-        <div class="hint" id="simStatus"></div>
+        <button class="action secondary" id="simInstantBtn">Jump to End</button>
+        <label style="margin-left: 10px;">Speed: <input type="number" id="simSpeedMult" value="1" min="0.1" max="10" step="0.1" style="width: 50px;"></label>
+
+        <div id="simStatus" class="status-box" style="margin-top: 12px;"></div>
+        <div id="simStatusBanner" class="status-banner" style="margin-top: 12px;"></div>
       </div>
+
       <div class="card">
+        <h3>Current Position</h3>
         <table>
-          <tr><td class="hint">Position</td><td id="simPosition">-</td><td class="hint">Course</td><td id="simCourse">-</td></tr>
-          <tr><td class="hint">Speed (kn)</td><td id="simSpeed">-</td><td class="hint">Sim time</td><td id="simTime">-</td></tr>
-          <tr><td class="hint">Distance run (nm)</td><td id="simDistRun">-</td><td class="hint">Distance to go (nm)</td><td id="simDistToGo">-</td></tr>
-          <tr><td class="hint">ETA</td><td id="simEta">-</td><td></td><td></td></tr>
+          <tr><td>Time:</td><td id="simTime">—</td></tr>
+          <tr><td>Position (Lat/Lon):</td><td id="simPosition">—</td></tr>
+          <tr><td>Course:</td><td id="simCourse">—</td></tr>
+          <tr><td>Speed:</td><td id="simSpeed">—</td></tr>
+          <tr><td>Distance run:</td><td id="simDistRun">—</td></tr>
+          <tr><td>Distance to go:</td><td id="simDistToGo">—</td></tr>
+          <tr><td>ETA:</td><td id="simEta">—</td></tr>
         </table>
-        <div id="simStatusBanner" class="status-banner" style="margin-top:12px;">Not started — click Reset</div>
       </div>
-      <div class="card"><h3>Event Log</h3>
-        <table><thead><tr><th>Sim time</th><th>Event</th><th>Area</th><th>Position</th></tr></thead><tbody id="simEventLog"></tbody></table>
+
+      <div class="card">
+        <h3>MARPOL/ECA Events Log</h3>
+        <table>
+          <thead><tr><th>Time</th><th>Event</th><th>Area</th><th>Position</th></tr></thead>
+          <tbody id="simEventLog"></tbody>
+        </table>
       </div>
     </div>
 
-    <!-- REPORTS -->
+    <!-- Reports -->
     <div class="page" id="page-reports">
-      <h2>Reports</h2>
+      <h2>Voyage Compliance Report</h2>
+      <div class="desc">Printable report of your route and MARPOL/ECA compliance timeline.</div>
       <div class="card">
         <button class="action" id="genReportBtn">Generate Report</button>
-        <button class="action secondary" id="printReportBtn">Export as PDF (print)</button>
+        <button class="action secondary" id="printReportBtn">Print / PDF</button>
+        <div id="reportContent" style="margin-top: 16px;"></div>
       </div>
-      <div class="card" id="reportContent"></div>
     </div>
 
-    <!-- SETTINGS -->
+    <!-- Settings -->
     <div class="page" id="page-settings">
       <h2>Settings</h2>
+      <div class="desc">Project settings, data export/import, and offline configuration.</div>
+
       <div class="card">
-        <h3>Offline Data Management</h3>
-        <p class="hint">Your route, theme, and settings are auto-saved locally. Export for backup or move to another device:</p>
-        <button class="action" id="exportBtn">Export project (.json)</button>
-        <input type="file" id="importFile" accept=".json">
+        <h3>Project</h3>
+        <label>Vessel name: <input type="text" id="vesselName" value="MV NORTHERN STAR"></label>
+        <label>Voyage ID: <input type="text" id="voyageId" placeholder="e.g., ROT-SZ-2026-Q3"></label>
       </div>
+
       <div class="card">
-        <h3>PWA / App Installation</h3>
-        <p class="hint" id="pwaHint">This app works offline. On a mobile device or Chrome, you can install it as an app.</p>
-        <button class="action secondary" id="installBtn" style="display:none;">Install App</button>
+        <h3>Data Export / Import</h3>
+        <button class="action" id="exportBtn">Export Project (.json)</button>
+        <label>Import project: <input type="file" id="importFile" accept=".json"></label>
       </div>
+
       <div class="card">
-        <h3>Service Worker Status</h3>
-        <div id="swStatus" class="hint">Checking...</div>
+        <h3>Offline Status</h3>
+        <p id="offlineStatusDisplay" style="font-size: 13px; color: var(--muted);">App status will show here.</p>
       </div>
     </div>
-
   </main>
 </div>
 
+<!-- Script loading order is critical: core engines first, then UI initialization -->
 <script src="js/geo_areas.js"></script>
 <script src="js/geo_engine.js"></script>
+<script src="js/compliance.js"></script>
 <script src="js/state.js"></script>
 <script src="js/route_import.js"></script>
-<script src="js/compliance.js"></script>
 <script src="js/xlsx_import.js"></script>
 <script src="js/rtz_import.js"></script>
 <script src="js/zip_reader.js"></script>
+<script src="js/world_map.js"></script>
 <script src="js/simulator.js"></script>
 <script src="js/report.js"></script>
-<script src="js/world_map.js"></script>
-<script src="js/app.js"></script>
+
+<!-- Offline data and chart layer support -->
+<script src="js/offline_data.js"></script>
+<script src="js/marine_charts.js"></script>
+<script src="js/sync_manager.js"></script>
+
+<!-- App bootstrap and UI event wiring -->
+<script src="js/main.js"></script>
+
+<!-- PWA registration -->
 <script src="service-worker-register.js"></script>
-<script>
-  // Initialize MARPOL areas table
-  window.addEventListener("DOMContentLoaded", () => {
-    updateDashboardStatus();
-  });
-  function updateDashboardStatus() {
-    document.getElementById("kpiAreas").textContent = GEO_AREAS.length;
-    document.getElementById("kpiWaypoints").textContent = state.route.waypoints.length;
-    const lastSync = localStorage.getItem("lastDataSync");
-    document.getElementById("kpiLastSync").textContent = lastSync ? new Date(lastSync).toLocaleDateString() : "Never";
-  }
-</script>
 </body>
 </html>
